@@ -1,0 +1,330 @@
+#!/bin/sh
+
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= #
+# PureDarwin - rc                                                               #
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= #
+# This tool is meant to automate the build procedure for host tools and system  #
+#   for the PureDarwin project.                                                 #
+# This is currently a work in progress, but this tool should basically handle   #
+#   ensuring
+# =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-= #
+
+### Host tool related constants
+# We want ninja before we start making other things, we use it for our default
+#   CMake generator for making Darwin.
+HOST_NINJA_BUILD_DIR="${RC_BUILD_ROOT}/tools/ninja"
+HOST_NINJA_ROOT="${RC_TOOLS_DIR}/ninja"
+HOST_NINJA_BUILD="v1.10.2"
+
+# We use swift releases here, this is all apple leaves public at this point, it seems.
+# This is built manually, we can invoke LLVM's CMake script directly ourselves.
+HOST_LLVM_BUILD_DIR="${RC_BUILD_ROOT}/tools/llvm"
+HOST_LLVM_ROOT="${RC_TOOLS_DIR}/llvm"
+HOST_LLVM_TAG="swift-5.5.2-RELEASE"
+HOST_LLVM_BRANCH="stable/20211026"
+
+# These tools make up our "host toolchain" we use to build the resulting system
+TARGET_NINJA="${RC_HOST_BIN}/ninja"
+
+TARGET_CXX="${RC_HOST_BIN}/clang++"
+TARGET_ASM="${RC_HOST_BIN}/clang"
+TARGET_CC="${RC_HOST_BIN}/clang"
+
+# This is the Darwin version we target. We build the host compiler for this
+#   target as the last entry in the triple. (arch-apple-darwinMM.mm.rr)
+# We also include the corresponding MacOS version, as CMake uses this.
+TARGET_DARWIN_VERSION="20.6.0"
+TARGET_MACOS_VERSION="11.5"
+
+### Utility functions
+function check_env {
+    [ -z "${RC_DARWIN_ROOT}" ] && echo "Error: \${RC_DARWIN_ROOT} environment variable not set!" && return 1
+
+    [ -z "${RC_TOOLS_DIR}" ] && echo "Error: \${RC_TOOLS_DIR} environment variable not set!" && return 1
+
+    return 0
+}
+
+function do_usage {
+    echo "Help: rc <verb>"
+}
+
+### Host tool build functions
+# This is the generator we use for the host tools and the target system.
+function do_make_ninja {
+    local rchosttype=$(echo ${RC_HOST_TYPE} | tr '[:upper:]' '[:lower:]')
+
+    echo "Checking out ninja sources..."
+    pushd "${HOST_NINJA_ROOT}"
+
+    git fetch origin refs/tags/"${HOST_NINJA_BUILD}"
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "Fetch failed with status ${status}!"
+
+        popd
+        return ${status}
+    fi
+
+    git checkout refs/tags/"${HOST_NINJA_BUILD}"
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "Checkout failed with status ${status}!"
+
+        popd
+        return ${status}
+    fi
+
+    echo "Bootstrapping and building ninja..."
+
+    mkdir -pv "${HOST_NINJA_BUILD_DIR}" || (status=$? && popd && return ${status})
+    cd "${HOST_NINJA_BUILD_DIR}"
+
+    "${HOST_NINJA_ROOT}/configure.py" --bootstrap --platform="${rchosttype}" --host="${rchosttype}"
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "Failed to building ninja!"
+
+        popd
+        return ${status}
+    fi
+
+    echo "Installing ninja to ${RC_HOST_BIN}..."
+    install -CSv -m 0755 ninja "${RC_HOST_BIN}/ninja"
+
+    popd
+    return 0
+}
+
+# This is a bit more complex than building ninja, I pulled this out by itself
+function checkout_llvm {
+    pushd "${HOST_LLVM_ROOT}"
+
+    echo "Checkout out LLVM sources (This may take a while)..."
+
+    git fetch origin refs/tags/"${HOST_LLVM_TAG}"
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "Failed to fetch LLVM sources! (tag=${HOST_LLVM_TAG}, status=${status})"
+
+        popd
+        return $status
+    fi
+
+    git checkout refs/tags/"${HOST_LLVM_TAG}"
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "Failed to checkout LLVM sources! (tag=${HOST_LLVM_TAG}, status=${status})"
+
+        popd
+        return $status
+    fi
+
+    popd
+    return $status
+}
+
+# We pull this out here so we can manually build ths
+function do_build_llvm {
+    pushd "${HOST_LLVM_ROOT}"
+
+    local llvm_commit=$(git log -n1 --pretty='%h')
+    local llvm_tag=$(git describe --exact-match --tags ${llvm_commit} 2> /dev/null)
+    local status=$?
+
+    # We're done in the LLVM root now
+    popd
+
+    # Note that this won't always work since Apple likes to put a lot of tags on commits.
+    # We may detect one of the other tags which doesn't match the tag we want.
+    # It's okay though, the git commands complete successfully anyway.
+    if [ $status -ne 0 ] || [ "${llvm_tag}" != "${HOST_LLVM_TAG}" ]; then
+        checkout_llvm || return $?
+    fi
+
+    echo "Configuring LLVM build..."
+    mkdir -pv "${HOST_LLVM_BUILD_DIR}" || return $?
+
+    # Note: We don't want to fight with LLVM about where to put binaries, so we just install
+    #   to ${RC_HOST_BIN}/.. and let the LLVM build system figure out to put everything in the
+    #   right directory. Note that if ${RC_HOST_BIN} is not of the form */bin, this will NOT work.
+    # TODO: Ensure ${RC_HOST_BIN} ends with a directory named `bin`
+    cmake -S "${HOST_LLVM_ROOT}/llvm"                                                           \
+        "-DLLVM_DEFAULT_TARGET_TRIPLE=${RC_HOST_ARCH}-apple-darwin-${TARGET_DARWIN_VERSION}"    \
+        "-DLLVM_TARGETS_TO_BUILD=AArch64;X86" "-DCMAKE_INSTALL_PREFIX=${RC_HOST_BIN}/.."        \
+        -DLLVM_ENABLE_PROJECTS=clang -DCMAKE_BUILD_TYPE=release                                 \
+        -B "${HOST_LLVM_BUILD_DIR}"                                                             \
+        -GNinja
+
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "Configure failed with status ${status}!"
+        return $status
+    fi
+
+    echo "Building LLVM (with clang)..."
+
+    "${TARGET_NINJA}" -C "${HOST_LLVM_BUILD_DIR}" -j "${RC_BUILD_JOBS}"
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "LLVM build failed with status ${status}!"
+        return $?
+    fi
+
+    echo "Installing LLVM (with clang) to ${RC_HOST_BIN}..."
+
+    "${TARGET_NINJA}" -C "${HOST_LLVM_BUILD_DIR}" -j "${RC_BUILD_JOBS}" install
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "LLVM install failed with status ${status}!"
+        return $?
+    fi
+
+    echo "LLVM Installation finished without error."
+    return 0
+}
+
+# Make everything that isn't ninja or llvm
+function make_host_tools {
+    echo "Building remaining host tools..."
+    echo "[Step 1]: Configuring source..."
+
+    cmake -S "${RC_TOOLS_DIR}"                                  \
+        -B "${RC_BUILD_ROOT}/tools"                             \
+        -G Ninja                                                \
+        "-DCMAKE_INSTALL_PREFIX=${RC_HOST_BIN}"
+
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "Configure failed with status ${status}!"
+        return $status
+    fi
+
+    echo "[Step 2]: Building source..."
+
+    "${TARGET_NINJA}" -C "${RC_BUILD_ROOT}/tools" -j "${RC_BUILD_JOBS}"
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "Build failed with status ${status}!"
+        return $status
+    fi
+
+    echo "[Step 3]: Installing tools..."
+
+    "${TARGET_NINJA}" -C "${RC_BUILD_ROOT}/tools" -j "${RC_BUILD_JOBS}" install
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "Install failed with status ${status}!"
+        return $status
+    fi
+
+    return 0
+}
+
+function make_host_toolchain {
+    echo "Creating host toolchain..."
+
+    # Only rebuild these things if necessary
+    [ ! -x "${TARGET_NINJA}" ] && (do_make_ninja || return 1)
+
+    # We use ninja to build llvm
+    [ ! -x "${TARGET_CC}" ] || [ ! -x "${TARGET_CXX}" ] && (do_build_llvm || return 1)
+
+    make_host_tools || return 1
+    return 0
+}
+
+### Target system build functions
+
+function make_target_system {
+    echo "Building target system 'Darwin ${TARGET_DARWIN_VERSION}'..."
+    echo "[Step 1]: Configuring source..."
+
+    # This is the main configure command
+    # TODO: RC_ARCHS
+    cmake -S "${RC_SOURCE_DIR}"                                 \
+        -B "${RC_BUILD_ROOT}"                                   \
+        -G Ninja                                                \
+        --toolchain "${RC_DARWIN_ROOT}/cmake/toolchain.cmake"   \
+        "-DCMAKE_INSTALL_PREFIX=${RC_SYSTEM_ROOT}"              \
+        "-DCMAKE_C_COMPILER=${TARGET_CC}"                       \
+        "-DCMAKE_CXX_COMPILER=${TARGET_CXX}"                    \
+        "-DCMAKE_ASM_COMPILER=${TARGET_ASM}"                    \
+        "-DCMAKE_MACOSX_MIN_VERSION=${TARGET_MACOS_VERSION}"    \
+        "-DRC_DARWIN_ROOT=${RC_DARWIN_ROOT}"                    \
+        "-DRC_SOURCE_DIR=${RC_SOURCE_DIR}"                      \
+        "-DRC_HOST_BIN=${RC_HOST_BIN}"                          \
+        "-DRC_ARCHS=x86_64"                                     \
+
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "Configure failed with status ${status}!"
+        return $status
+    fi
+
+    echo "[Step 2]: Building source..."
+
+    "${TARGET_NINJA}" -C "${RC_BUILD_ROOT}" -j "${RC_BUILD_JOBS}"
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "Build failed with status ${status}!"
+        return $status
+    fi
+
+    echo "[Step 3]: Installing System..."
+
+    "${TARGET_NINJA}" -C "${RC_BUILD_ROOT}" -j "${RC_BUILD_JOBS}" install
+    status=$?
+
+    if [ $status -ne 0 ]; then
+        echo "Install failed with status ${status}!"
+        return $status
+    fi
+
+    return 0
+}
+
+### Main code starts here
+
+# Make sure the shell environment is sane
+if ! check_env; then
+    echo "This shell isn't properly setup to build Darwin! Did you source setup.sh?"
+    exit 1
+fi
+
+# We only accept one argument for now.
+if [ $# -gt 1 ]; then
+    echo "Error: Too many arguments!"
+
+    do_usage
+    exit 1
+fi
+
+case $1 in
+    --make-host-toolchain)
+        make_host_toolchain
+        ;;
+    build)
+        make_target_system
+        ;;
+    "") ;;
+    *)
+        echo "Error: Unknown argument provided to command!"
+
+        do_usage
+        exit 1
+        ;;
+esac
