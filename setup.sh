@@ -26,8 +26,7 @@ case ${RC_HOST_TYPE} in
         fi
 
         if [ -z "${RC_BUILD_JOBS}" ]; then
-            # TODO: Tune this
-            export RC_BUILD_JOBS=1
+            export RC_BUILD_JOBS=$(expr `/usr/sbin/sysctl -n hw.logicalcpu` + 1)
         fi
 
         ;;
@@ -83,6 +82,16 @@ if [ -z "${RC_HOST_BIN}" ]; then
     export RC_HOST_BIN="${RC_PRODUCT_DIR}/toolchain/bin"
 fi
 
+# Supported target architectures
+if [ -z "${RC_ARCHS}" ]; then
+    export RC_ARCHS="x86_64 x86_64h arm64 arm64e"
+fi
+
+# Default to non-verbose builds
+if [ -z "${RC_VERBOSE}" ]; then
+    export RC_VERBOSE=NO
+fi
+
 # Help the build system find our host tools first
 if [ ! -d "${RC_HOST_BIN}" ]; then
     mkdir -pv "${RC_HOST_BIN}"
@@ -114,7 +123,7 @@ unset OLD_PATH
 host_rc_binary="${RC_TOOLS_DIR}/dbuild/rc"
 
 if [ "${host_rc_binary}" -nt "${RC_HOST_BIN}/$(basename ${host_rc_binary})" ]; then
-    install -CSv -m 0755 "${host_rc_binary}" "${RC_HOST_BIN}/$(basename ${host_rc_binary})"
+    install -CS -m 0755 "${host_rc_binary}" "${RC_HOST_BIN}/$(basename ${host_rc_binary})"
 fi
 
 # Refrain from polluting the user's shell
@@ -122,9 +131,9 @@ unset host_rc_binary
 
 # This allows for us to preprocess certain arguments to the `rc` command and
 #   preempt their implementation. Implement `rc root` to move to the root directory
-# TODO: Decide if this should be a `cd` or `pushd`
+# TODO: Decide if this should be a `cd` or `pushd` (`cd` is probably the right move)
 function rc {
-    if [ $# == 0 ] || [ "$1" == "root" ]; then
+    if [[ $# -eq 0 ]] || [[ "$1" == "root" ]]; then
         cd "${RC_DARWIN_ROOT}"
 
         return $?
@@ -147,7 +156,9 @@ echo "RC_HOST_ARCH: ${RC_HOST_ARCH}"
 echo "RC_TOOLS_DIR: ${RC_TOOLS_DIR}"
 echo "RC_HOST_BIN: ${RC_HOST_BIN}"
 echo ""
+echo "RC_ARCHS: ${RC_ARCHS}"
 echo "RC_BUILD_JOBS: ${RC_BUILD_JOBS}"
+echo "RC_VERBOSE: ${RC_VERBOSE}"
 
 # This will kill symlinks in the current working directory
 rc root
