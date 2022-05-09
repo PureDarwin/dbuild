@@ -80,7 +80,7 @@ if [ -z "${RC_TOOLS_DIR}" ]; then
 fi
 
 if [ -z "${RC_HOST_BIN}" ]; then
-    export RC_HOST_BIN="${RC_BUILD_ROOT}/toolchain/bin"
+    export RC_HOST_BIN="${RC_PRODUCT_DIR}/toolchain/bin"
 fi
 
 # Help the build system find our host tools first

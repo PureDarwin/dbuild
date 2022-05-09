@@ -20,7 +20,7 @@ HOST_NINJA_BUILD="v1.10.2"
 # This is built manually, we can invoke LLVM's CMake script directly ourselves.
 HOST_LLVM_BUILD_DIR="${RC_BUILD_ROOT}/tools/llvm"
 HOST_LLVM_ROOT="${RC_TOOLS_DIR}/llvm"
-HOST_LLVM_TAG="swift-5.5.2-RELEASE"
+#HOST_LLVM_TAG="swift-5.5.2-RELEASE"
 HOST_LLVM_BRANCH="stable/20211026"
 
 # These tools make up our "host toolchain" we use to build the resulting system
@@ -35,6 +35,10 @@ TARGET_CC="${RC_HOST_BIN}/clang"
 # We also include the corresponding MacOS version, as CMake uses this.
 TARGET_DARWIN_VERSION="20.6.0"
 TARGET_MACOS_VERSION="11.5"
+
+# These are the base C flags we use. There may be a better place for these.
+RC_NONARCH_CFLAGS="-Wno-availability -Wno-deprecated-non-prototype -Wno-reserved-identifier -Wno-deprecated-declarations -Wno-deprecated-register -Wno-null-pointer-subtraction -Wno-declaration-after-statement -Wno-unused-but-set-variable"
+RC_NONARCH_CXXFLAGS="${RC_NONARCH_CFLAGS} -Wno-inconsistent-missing-override"
 
 ### Utility functions
 function check_env {
@@ -105,21 +109,24 @@ function checkout_llvm {
 
     echo "Checkout out LLVM sources (This may take a while)..."
 
-    git fetch origin refs/tags/"${HOST_LLVM_TAG}"
+    git fetch origin #refs/tags/"${HOST_LLVM_TAG}"
     status=$?
 
     if [ $status -ne 0 ]; then
-        echo "Failed to fetch LLVM sources! (tag=${HOST_LLVM_TAG}, status=${status})"
+        #echo "Failed to fetch LLVM sources! (tag=${HOST_LLVM_TAG}, status=${status})"
+        echo "Failed to fetch LLVM sources! (branch=${HOST_LLVM_BRANCH}, status=${status})"
 
         popd
         return $status
     fi
 
-    git checkout refs/tags/"${HOST_LLVM_TAG}"
+    #git checkout refs/tags/"${HOST_LLVM_TAG}"
+    git switch "${HOST_LLVM_BRANCH}"
     status=$?
 
     if [ $status -ne 0 ]; then
-        echo "Failed to checkout LLVM sources! (tag=${HOST_LLVM_TAG}, status=${status})"
+        #echo "Failed to checkout LLVM sources! (tag=${HOST_LLVM_TAG}, status=${status})"
+        echo "Failed to fetch LLVM sources! (branch=${HOST_LLVM_BRANCH}, status=${status})"
 
         popd
         return $status
@@ -134,7 +141,7 @@ function do_build_llvm {
     pushd "${HOST_LLVM_ROOT}"
 
     local llvm_commit=$(git log -n1 --pretty='%h')
-    local llvm_tag=$(git describe --exact-match --tags ${llvm_commit} 2> /dev/null)
+    #local llvm_tag=$(git describe --exact-match --tags ${llvm_commit} 2> /dev/null)
     local status=$?
 
     # We're done in the LLVM root now
@@ -143,7 +150,8 @@ function do_build_llvm {
     # Note that this won't always work since Apple likes to put a lot of tags on commits.
     # We may detect one of the other tags which doesn't match the tag we want.
     # It's okay though, the git commands complete successfully anyway.
-    if [ $status -ne 0 ] || [ "${llvm_tag}" != "${HOST_LLVM_TAG}" ]; then
+    #if [ $status -ne 0 ] || [ "${llvm_tag}" != "${HOST_LLVM_TAG}" ]; then
+    if [ $status -ne 0 ]; then
         checkout_llvm || return $?
     fi
 
@@ -157,7 +165,9 @@ function do_build_llvm {
     cmake -S "${HOST_LLVM_ROOT}/llvm"                                                           \
         "-DLLVM_DEFAULT_TARGET_TRIPLE=${RC_HOST_ARCH}-apple-darwin-${TARGET_DARWIN_VERSION}"    \
         "-DLLVM_TARGETS_TO_BUILD=AArch64;X86" "-DCMAKE_INSTALL_PREFIX=${RC_HOST_BIN}/.."        \
-        -DLLVM_ENABLE_PROJECTS=clang -DCMAKE_BUILD_TYPE=release                                 \
+        "-DLLVM_ENABLE_PROJECTS=clang;clang-tools-extra;compiler-rt"                            \
+        -DCMAKE_BUILD_TYPE=release -DLLVM_ENABLE_LTO=ON                                         \
+        -DPACKAGE_VENDOR=Apple -DLLVM_ENABLE_TIMESTAMPS=OFF                                     \
         -B "${HOST_LLVM_BUILD_DIR}"                                                             \
         -GNinja
 
@@ -239,7 +249,7 @@ function make_host_toolchain {
     [ ! -x "${TARGET_NINJA}" ] && (do_make_ninja || return 1)
 
     # We use ninja to build llvm
-    [ ! -x "${TARGET_CC}" ] || [ ! -x "${TARGET_CXX}" ] && (do_build_llvm || return 1)
+    [ ! -x "${TARGET_CC}" ] || [ -x "${TARGET_CXX}" ] && (do_build_llvm || return 1)
 
     make_host_tools || return 1
     return 0
@@ -250,6 +260,12 @@ function make_host_toolchain {
 function make_target_system {
     echo "Building target system 'Darwin ${TARGET_DARWIN_VERSION}'..."
     echo "[Step 1]: Configuring source..."
+
+    if [ "${RC_VERBOSE}" == "YES" ]; then
+        v_flag="-v"
+    else
+        v_flag=""
+    fi
 
     # This is the main configure command
     # TODO: RC_ARCHS
@@ -266,6 +282,11 @@ function make_target_system {
         "-DRC_SOURCE_DIR=${RC_SOURCE_DIR}"                      \
         "-DRC_HOST_BIN=${RC_HOST_BIN}"                          \
         "-DRC_ARCHS=x86_64"                                     \
+        "-DCMAKE_VERBOSE_MAKEFILE=${RC_VERBOSE}"                \
+        "-DRC_NONARCH_CXXFLAGS=${RC_NONARCH_CXXFLAGS}"          \
+        "-DRC_NONARCH_CFLAGS=${RC_NONARCH_CFLAGS}"              \
+        "-DCMAKE_CXX_FLAGS=${RC_NONARCH_CXXFLAGS}"              \
+        "-DCMAKE_C_FLAGS=${RC_NONARCH_CFLAGS}"
 
     status=$?
 
@@ -276,7 +297,7 @@ function make_target_system {
 
     echo "[Step 2]: Building source..."
 
-    "${TARGET_NINJA}" -C "${RC_BUILD_ROOT}" -j "${RC_BUILD_JOBS}"
+    "${TARGET_NINJA}" ${v_flag} -C "${RC_BUILD_ROOT}" -j "${RC_BUILD_JOBS}"
     status=$?
 
     if [ $status -ne 0 ]; then
@@ -286,7 +307,7 @@ function make_target_system {
 
     echo "[Step 3]: Installing System..."
 
-    "${TARGET_NINJA}" -C "${RC_BUILD_ROOT}" -j "${RC_BUILD_JOBS}" install
+    "${TARGET_NINJA}" ${v_flag} -C "${RC_BUILD_ROOT}" -j "${RC_BUILD_JOBS}" install
     status=$?
 
     if [ $status -ne 0 ]; then
@@ -328,3 +349,9 @@ case $1 in
         exit 1
         ;;
 esac
+
+
+## TODO: These are RC_* variables I've found in Apple sources that we don't currently set:
+# RC_NONARCH_CFLAGS
+# RC_ProjectName
+# RC_XBS
