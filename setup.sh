@@ -97,37 +97,10 @@ if [ ! -d "${RC_HOST_BIN}" ]; then
     mkdir -pv "${RC_HOST_BIN}"
 fi
 
-export PATH="${RC_HOST_BIN}:${PATH}"
-
-# Remove duplicate entries from $PATH
-OLD_PATH=$PATH:; PATH=
-
-while [ -n "$OLD_PATH" ]; do
-    x=${OLD_PATH%%:*}
-
-    case $PATH: in
-        *:"$x":*) ;;
-        *) PATH="$PATH:$x";;
-    esac
-
-    OLD_PATH=${OLD_PATH#*:}
-done
-
-PATH=${PATH#:}
-unset OLD_PATH
-
-# This file will is installed to ${RC_HOST_BIN} by this script. This is the main
-#   PureDarwin source manipulation tool.
-# We create "${RC_HOST_BIN}" if necessary and install this with the host `install`
-#   command. If you don't have `install`, good luck building an OS...
-host_rc_binary="${RC_TOOLS_DIR}/dbuild/rc"
-
-if [ "${host_rc_binary}" -nt "${RC_HOST_BIN}/$(basename ${host_rc_binary})" ]; then
-    install -CS -m 0755 "${host_rc_binary}" "${RC_HOST_BIN}/$(basename ${host_rc_binary})"
-fi
-
-# Refrain from polluting the user's shell
-unset host_rc_binary
+# This is the path to the `rc` script that we invoke. We expect it to be in the
+#   tools directory with this script. See the `rc` function below for how it is
+#   invoked in the user shell.
+export RC_SCRIPT_PATH="${RC_TOOLS_DIR}/dbuild/rc"
 
 # This allows for us to preprocess certain arguments to the `rc` command and
 #   preempt their implementation. Implement `rc root` to move to the root directory
@@ -139,7 +112,7 @@ function rc {
         return $?
     fi
 
-    env rc $@
+    "${RC_SCRIPT_PATH}" $@
 }
 
 # Print out our default configuration

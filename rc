@@ -303,6 +303,7 @@ function make_target_system {
         "-DRC_DARWIN_ROOT=${RC_DARWIN_ROOT}"                    \
         "-DRC_SOURCE_DIR=${RC_SOURCE_DIR}"                      \
         "-DRC_HOST_BIN=${RC_HOST_BIN}"                          \
+        "-DRC_CURRENT_ARCH=x86_64"                              \
         "-DRC_ARCHS=${RC_ARCHS}"                                \
         "-DCMAKE_VERBOSE_MAKEFILE=${RC_VERBOSE}"                \
         "-DRC_NONARCH_CXXFLAGS=${RC_NONARCH_CXXFLAGS}"          \
