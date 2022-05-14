@@ -176,6 +176,7 @@ function do_build_llvm {
     #   right directory. Note that if ${RC_HOST_BIN} is not of the form */bin, this will NOT work.
     # TODO: Ensure ${RC_HOST_BIN} ends with a directory named `bin`
     cmake -S "${HOST_LLVM_ROOT}/llvm"                                                           \
+        "-DCMAKE_MAKE_PROGRAM=${RC_HOST_BIN}/ninja"                                             \
         "-DLLVM_DEFAULT_TARGET_TRIPLE=${RC_HOST_ARCH}-apple-darwin-${TARGET_DARWIN_VERSION}"    \
         "-DLLVM_TARGETS_TO_BUILD=AArch64;X86" "-DCMAKE_INSTALL_PREFIX=${RC_HOST_BIN}/.."        \
         "-DLLVM_ENABLE_PROJECTS=clang;clang-tools-extra;compiler-rt"                            \
@@ -228,6 +229,7 @@ function make_host_tools {
     fi
 
     cmake -S "${RC_TOOLS_DIR}"                                  \
+        "-DCMAKE_MAKE_PROGRAM=${RC_HOST_BIN}/ninja"             \
         "-DRC_HOST_BIN=${RC_HOST_BIN}"                          \
         -B "${RC_BUILD_ROOT}/tools"                             \
         -G Ninja                                                \
@@ -293,6 +295,7 @@ function make_target_system {
         -B "${RC_BUILD_ROOT}"                                   \
         -G Ninja                                                \
         --toolchain "${RC_DARWIN_ROOT}/cmake/toolchain.cmake"   \
+        "-DCMAKE_MAKE_PROGRAM=${RC_HOST_BIN}/ninja"             \
         "-DCMAKE_INSTALL_PREFIX=${RC_SYSTEM_ROOT}"              \
         "-DCMAKE_C_COMPILER=${TARGET_CC}"                       \
         "-DCMAKE_CXX_COMPILER=${TARGET_CXX}"                    \
