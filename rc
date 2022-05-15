@@ -115,6 +115,7 @@ function do_make_ninja {
     fi
 
     echo "Installing ninja to ${RC_HOST_BIN}..."
+    install -d -m 0755 "${RC_HOST_BIN}"
     install -CSv -m 0755 "${HOST_NINJA_BUILD_DIR}/ninja" "${RC_HOST_BIN}/ninja"
 
     popd
@@ -171,6 +172,9 @@ function do_build_llvm {
     echo "Configuring LLVM build..."
     mkdir -pv "${HOST_LLVM_BUILD_DIR}" || return $?
 
+    # Note: most of the configuration options come from various caches to build Apple LLVM tools...
+    local llvm_cflags="-fno-stack-protector -fno-common -Wno-profile-instr-unprofiled -O2 -gline-tables-only"
+
     # Note: We don't want to fight with LLVM about where to put binaries, so we just install
     #   to ${RC_HOST_BIN}/.. and let the LLVM build system figure out to put everything in the
     #   right directory. Note that if ${RC_HOST_BIN} is not of the form */bin, this will NOT work.
@@ -178,10 +182,27 @@ function do_build_llvm {
     cmake -S "${HOST_LLVM_ROOT}/llvm"                                                           \
         "-DCMAKE_MAKE_PROGRAM=${RC_HOST_BIN}/ninja"                                             \
         "-DLLVM_DEFAULT_TARGET_TRIPLE=${RC_HOST_ARCH}-apple-darwin-${TARGET_DARWIN_VERSION}"    \
-        "-DLLVM_TARGETS_TO_BUILD=AArch64;X86" "-DCMAKE_INSTALL_PREFIX=${RC_HOST_BIN}/.."        \
+        "-DLLVM_TARGETS_TO_BUILD=AArch64;ARM;X86"                                               \
+        "-DCLANG_LINKS_TO_CREATE=clang++;cc;c++"                                                \
+        "-DCMAKE_MACOSX_RPATH=ON"                                                               \
+        "-DLLVM_ENABLE_ZLIB=ON"                                                                 \
+        "-DLLVM_ENABLE_MODULES=ON"                                                              \
+        "-DLLVM_LTO_VERSION_OFFSET=3000"                                                        \
+        "-DCLANG_SPAWN_CC1=ON"                                                                  \
+        "-DBUG_REPORT_URL=https://github.com/PureDarwin"                                        \
+        "-DLLVM_BUILD_EXTERNAL_COMPILER_RT=ON"                                                  \
+        "-DCOMPILER_RT_ENABLE_IOS=OFF"                                                          \
+        "-DCOMPILER_RT_ENABLE_WATCHOS=OFF"                                                      \
+        "-DCOMPILER_RT_ENABLE_TVOS=OFF"                                                         \
+        "-DLLVM_ENABLE_LIBCXX=ON"                                                               \
+        "-DLLVM_BUILD_UTILS=ON"                                                                 \
+        "-DLLVM_INSTALL_UTILS=ON"                                                               \
+        "-DCMAKE_C_FLAGS=${llvm_cflags}"                                                        \
+        "-DCMAKE_CXX_FLAGS=${llvm_cflags}"                                                      \
+        "-DCMAKE_INSTALL_PREFIX=${RC_HOST_BIN}/.."                                              \
         "-DLLVM_ENABLE_PROJECTS=clang;clang-tools-extra;compiler-rt"                            \
         "-DCMAKE_BUILD_TYPE=release"                                                            \
-        "-DLLVM_ENABLE_LTO=ON"                                                                  \
+        "-DLLVM_ENABLE_LTO=Full"                                                                \
         "-DPACKAGE_VENDOR=Apple"                                                                \
         -B "${HOST_LLVM_BUILD_DIR}"                                                             \
         -GNinja
